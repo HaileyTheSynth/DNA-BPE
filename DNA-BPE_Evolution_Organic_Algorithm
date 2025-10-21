@@ -1,0 +1,530 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Pause, RotateCcw, Dna } from 'lucide-react';
+
+const MathematicalCreatures = () => {
+  const canvasRef = useRef(null);
+  const [running, setRunning] = useState(false);
+  const [generation, setGeneration] = useState(0);
+  const [creatures, setCreatures] = useState([]);
+  const [selectedCreature, setSelectedCreature] = useState(null);
+  const animationRef = useRef(null);
+  const timeRef = useRef(0);
+
+  // Mathematical genome - codons are mathematical operations
+  const MATH_CODONS = {
+    // Trigonometric
+    'SIN': (x) => Math.sin(x),
+    'COS': (x) => Math.cos(x),
+    'TAN': (x) => Math.tan(x),
+    
+    // Transformations
+    'SQR': (x) => x * x,
+    'SQRT': (x) => Math.sqrt(Math.abs(x)),
+    'ABS': (x) => Math.abs(x),
+    
+    // Operations
+    'ADD': (a, b) => a + b,
+    'MUL': (a, b) => a * b,
+    'DIV': (a, b) => b !== 0 ? a / b : 0,
+  };
+
+  // Creature class - mathematical organism
+  class MathCreature {
+    constructor(genome, id, generation) {
+      this.id = id;
+      this.generation = generation;
+      this.genome = genome; // Array of gene expressions
+      this.fitness = 0;
+      this.age = 0;
+      this.points = [];
+      this.color = this.genomeToColor();
+      this.birthTime = Date.now();
+    }
+
+    // Convert genome to visual color
+    genomeToColor() {
+      const hash = this.genome.join('').split('').reduce((a, b) => {
+        a = ((a << 5) - a) + b.charCodeAt(0);
+        return a & a;
+      }, 0);
+      const hue = Math.abs(hash) % 360;
+      return `hsl(${hue}, 80%, 60%)`;
+    }
+
+    // Generate creature's form using its genome
+    generatePoints(t, numPoints = 8000) {
+      const points = [];
+      
+      // Decode genome into mathematical expressions
+      const genes = this.genome;
+      
+      for (let i = 0; i < numPoints; i++) {
+        const x = i;
+        const y = i / 235.0;
+        
+        // Build mathematical expression from genome
+        let k, e, d, q, c;
+        
+        try {
+          // Gene 0-2: k expression
+          const k_amp = parseFloat(genes[0]) || 4;
+          const k_freq1 = parseFloat(genes[1]) || 11;
+          const k_freq2 = parseFloat(genes[2]) || 14;
+          k = (k_amp + Math.sin(x / k_freq1 + 8 * t)) * Math.cos(x / k_freq2);
+          
+          // Gene 3-4: e expression
+          const e_div = parseFloat(genes[3]) || 8;
+          const e_offset = parseFloat(genes[4]) || 19;
+          e = y / e_div - e_offset;
+          
+          // Gene 5-7: d expression
+          const d_freq = parseFloat(genes[5]) || 9;
+          const d_mul = parseFloat(genes[6]) || 2;
+          d = Math.sqrt(k * k + e * e) + Math.sin(y / d_freq + d_mul * t);
+          
+          // Gene 8-11: q expression
+          const q_mul1 = parseFloat(genes[7]) || 2;
+          const q_freq = parseFloat(genes[8]) || 17;
+          const q_mul2 = parseFloat(genes[9]) || 9;
+          const q_mul3 = parseFloat(genes[10]) || 2;
+          q = q_mul1 * Math.sin(2 * k) + Math.sin(y / q_freq) * k * (q_mul2 + q_mul3 * Math.sin(y - 3 * d));
+          
+          // Gene 12-13: c expression
+          const c_div = parseFloat(genes[11]) || 49;
+          c = (d * d) / c_div - t;
+          
+          // Gene 14-16: final position
+          const xp_mul = parseFloat(genes[12]) || 50;
+          const xp_offset = parseFloat(genes[13]) || 200;
+          const yp_mul = parseFloat(genes[14]) || 39;
+          const yp_offset = parseFloat(genes[15]) || -440;
+          
+          const xp = q + xp_mul * Math.cos(c) + xp_offset;
+          const yp = q * Math.sin(c) + yp_mul * d + yp_offset;
+          
+          // Transform to canvas coordinates
+          const canvasX = xp;
+          const canvasY = 400 - yp;
+          
+          if (isFinite(canvasX) && isFinite(canvasY)) {
+            points.push({ x: canvasX, y: canvasY });
+          }
+        } catch (e) {
+          // Skip invalid points
+        }
+      }
+      
+      this.points = points;
+      return points;
+    }
+
+    // Calculate fitness based on aesthetic qualities
+    calculateFitness() {
+      if (this.points.length < 100) {
+        this.fitness = 0;
+        return;
+      }
+      
+      let fitness = 0;
+      
+      // Point count (more points = more coverage)
+      fitness += Math.min(this.points.length / 100, 50);
+      
+      // Distribution across canvas
+      const xVals = this.points.map(p => p.x);
+      const yVals = this.points.map(p => p.y);
+      const xRange = Math.max(...xVals) - Math.min(...xVals);
+      const yRange = Math.max(...yVals) - Math.min(...yVals);
+      fitness += (xRange / 10) + (yRange / 10);
+      
+      // Smoothness (neighboring points should be close)
+      let smoothness = 0;
+      for (let i = 0; i < Math.min(1000, this.points.length - 1); i++) {
+        const dx = this.points[i + 1].x - this.points[i].x;
+        const dy = this.points[i + 1].y - this.points[i].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 50) smoothness++;
+      }
+      fitness += (smoothness / 10);
+      
+      // Complexity (variety in positions)
+      const xBuckets = new Set(xVals.map(x => Math.floor(x / 20)));
+      const yBuckets = new Set(yVals.map(y => Math.floor(y / 20)));
+      fitness += xBuckets.size * 0.5;
+      fitness += yBuckets.size * 0.5;
+      
+      // Bonus for age (longevity)
+      fitness += this.age * 0.1;
+      
+      this.fitness = fitness;
+    }
+
+    // Genetic operations
+    mutate() {
+      const mutationType = Math.random();
+      const geneIdx = Math.floor(Math.random() * this.genome.length);
+      
+      if (mutationType < 0.4) {
+        // Point mutation - small change to coefficient
+        const currentVal = parseFloat(this.genome[geneIdx]) || 1;
+        this.genome[geneIdx] = (currentVal + (Math.random() - 0.5) * 2).toFixed(2);
+      } else if (mutationType < 0.7) {
+        // Larger mutation
+        this.genome[geneIdx] = (Math.random() * 20 - 10).toFixed(2);
+      } else if (mutationType < 0.85 && this.genome.length < 20) {
+        // Duplication - copy a gene
+        const copyIdx = Math.floor(Math.random() * this.genome.length);
+        this.genome.splice(geneIdx, 0, this.genome[copyIdx]);
+      } else if (this.genome.length > 10) {
+        // Deletion
+        this.genome.splice(geneIdx, 1);
+      }
+    }
+
+    draw(ctx, t, alpha = 1) {
+      if (this.points.length === 0) return;
+      
+      // Draw creature as flowing particles
+      ctx.save();
+      
+      const color = this.color;
+      const [h, s, l] = color.match(/\d+/g).map(Number);
+      
+      // Draw glow if high fitness
+      if (this.fitness > 50) {
+        ctx.globalAlpha = alpha * 0.3;
+        this.points.forEach((p, i) => {
+          if (i % 20 === 0) {
+            const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 8);
+            gradient.addColorStop(0, `hsla(${h}, ${s}%, ${l}%, 0.6)`);
+            gradient.addColorStop(1, `hsla(${h}, ${s}%, ${l}%, 0)`);
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        });
+      }
+      
+      // Draw points
+      ctx.globalAlpha = alpha;
+      this.points.forEach((p, i) => {
+        // Vary brightness slightly for depth
+        const variation = Math.sin(i * 0.01 + t * 2) * 10;
+        ctx.fillStyle = `hsl(${h}, ${s}%, ${l + variation}%)`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      
+      ctx.restore();
+    }
+  }
+
+  // Initialize population
+  const initPopulation = () => {
+    const pop = [];
+    
+    // Create diverse starting genomes
+    const templates = [
+      // Original creature
+      ['4', '11', '14', '8', '19', '9', '2', '2', '17', '9', '2', '49', '50', '200', '39', '-440'],
+      // Variations
+      ['3', '9', '12', '7', '15', '8', '3', '2', '15', '8', '3', '40', '45', '180', '35', '-400'],
+      ['5', '13', '16', '9', '21', '10', '1', '3', '19', '10', '1', '55', '55', '220', '42', '-480'],
+      ['4', '10', '13', '8', '18', '9', '2', '2', '16', '9', '2', '48', '52', '205', '40', '-450'],
+    ];
+    
+    templates.forEach((genome, i) => {
+      pop.push(new MathCreature([...genome], i, 0));
+    });
+    
+    return pop;
+  };
+
+  // Evolution through recombination
+  const evolve = () => {
+    if (creatures.length === 0) return;
+    
+    // Age all creatures
+    creatures.forEach(c => c.age++);
+    
+    // Recalculate fitness
+    const t = timeRef.current;
+    creatures.forEach(c => {
+      c.generatePoints(t);
+      c.calculateFitness();
+    });
+    
+    // Sort by fitness
+    const sorted = [...creatures].sort((a, b) => b.fitness - a.fitness);
+    
+    // Keep top 50%
+    const survivors = sorted.slice(0, Math.max(2, Math.ceil(creatures.length / 2)));
+    
+    // Generate offspring through recombination
+    const newPop = [...survivors];
+    let nextId = Math.max(...creatures.map(c => c.id)) + 1;
+    
+    while (newPop.length < 8) {
+      // Select two parents
+      const p1 = survivors[Math.floor(Math.random() * survivors.length)];
+      const p2 = survivors[Math.floor(Math.random() * survivors.length)];
+      
+      // CROSSOVER - mix genomes at random point
+      const crossPoint = Math.floor(Math.random() * Math.min(p1.genome.length, p2.genome.length));
+      const childGenome = [
+        ...p1.genome.slice(0, crossPoint),
+        ...p2.genome.slice(crossPoint)
+      ];
+      
+      const child = new MathCreature(childGenome, nextId++, generation + 1);
+      
+      // MUTATION
+      if (Math.random() < 0.6) {
+        child.mutate();
+      }
+      
+      // DUPLICATION (whole genome segment)
+      if (Math.random() < 0.1 && child.genome.length < 18) {
+        const segStart = Math.floor(Math.random() * child.genome.length);
+        const segEnd = Math.min(segStart + 3, child.genome.length);
+        const segment = child.genome.slice(segStart, segEnd);
+        child.genome.splice(segStart, 0, ...segment);
+      }
+      
+      // INVERSION
+      if (Math.random() < 0.1) {
+        const start = Math.floor(Math.random() * child.genome.length);
+        const end = Math.min(start + 4, child.genome.length);
+        const segment = child.genome.slice(start, end).reverse();
+        child.genome.splice(start, end - start, ...segment);
+      }
+      
+      newPop.push(child);
+    }
+    
+    setCreatures(newPop);
+    setGeneration(g => g + 1);
+    setSelectedCreature(newPop[0]);
+  };
+
+  // Drawing
+  const draw = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const t = timeRef.current;
+    
+    // Clear with dark background
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, 800, 600);
+    
+    // Generate and draw all creatures
+    creatures.forEach((creature, i) => {
+      creature.generatePoints(t);
+      const alpha = selectedCreature && selectedCreature.id === creature.id ? 1 : 0.3;
+      creature.draw(ctx, t, alpha);
+    });
+    
+    // Info overlay
+    if (selectedCreature) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillRect(10, 10, 280, 120);
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 14px monospace';
+      ctx.fillText(`Creature #${selectedCreature.id}`, 20, 30);
+      ctx.fillText(`Generation: ${selectedCreature.generation}`, 20, 50);
+      ctx.fillText(`Fitness: ${selectedCreature.fitness.toFixed(1)}`, 20, 70);
+      ctx.fillText(`Age: ${selectedCreature.age}`, 20, 90);
+      ctx.fillText(`Genome: ${selectedCreature.genome.length} genes`, 20, 110);
+    }
+    
+    timeRef.current += 0.02;
+  };
+
+  // Animation loop
+  useEffect(() => {
+    const animate = () => {
+      draw();
+      animationRef.current = requestAnimationFrame(animate);
+    };
+    animate();
+    return () => cancelAnimationFrame(animationRef.current);
+  }, [creatures, selectedCreature]);
+
+  // Evolution loop
+  useEffect(() => {
+    if (!running) return;
+    
+    const interval = setInterval(() => {
+      evolve();
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [running, creatures, generation]);
+
+  // Initialize
+  useEffect(() => {
+    const initial = initPopulation();
+    setCreatures(initial);
+    setSelectedCreature(initial[0]);
+  }, []);
+
+  const reset = () => {
+    setRunning(false);
+    setGeneration(0);
+    timeRef.current = 0;
+    const initial = initPopulation();
+    setCreatures(initial);
+    setSelectedCreature(initial[0]);
+  };
+
+  return (
+    <div className="w-full max-w-7xl mx-auto p-6 bg-gray-900 rounded-xl shadow-2xl">
+      <div className="mb-4">
+        <h1 className="text-3xl font-bold text-white mb-2 flex items-center gap-2">
+          🌊 Mathematical Creatures: Genome-Encoded Animation
+        </h1>
+        <p className="text-gray-400">
+          Each creature is a living mathematical equation - watch them evolve through recombination!
+        </p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="col-span-2">
+          <canvas
+            ref={canvasRef}
+            width={800}
+            height={600}
+            className="w-full border-4 border-cyan-500 rounded-lg shadow-lg cursor-pointer"
+            style={{ background: '#0a0a0a' }}
+            onClick={() => {
+              if (creatures.length > 0) {
+                const nextIdx = (creatures.findIndex(c => c.id === selectedCreature.id) + 1) % creatures.length;
+                setSelectedCreature(creatures[nextIdx]);
+              }
+            }}
+          />
+          <div className="text-xs text-gray-500 mt-1 text-center">
+            Click canvas to cycle through creatures
+          </div>
+        </div>
+        
+        <div className="space-y-4">
+          {/* Genome Display */}
+          <div className="bg-gray-800 rounded-lg p-4 h-80 overflow-auto">
+            <h3 className="font-bold text-cyan-400 mb-2 flex items-center gap-2">
+              <Dna size={16} />
+              Genome (DNA)
+            </h3>
+            {selectedCreature ? (
+              <div className="space-y-2">
+                <div className="text-xs text-gray-400">
+                  Creature #{selectedCreature.id} | Gen {selectedCreature.generation}
+                </div>
+                <div className="font-mono text-xs space-y-1">
+                  {selectedCreature.genome.map((gene, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-gray-500 w-6">{i}:</span>
+                      <span className={`px-2 py-0.5 rounded ${
+                        parseFloat(gene) > 10 ? 'bg-red-900 text-red-300' :
+                        parseFloat(gene) < -10 ? 'bg-blue-900 text-blue-300' :
+                        'bg-green-900 text-green-300'
+                      }`}>
+                        {gene}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="text-gray-500 text-sm">Select a creature</div>
+            )}
+          </div>
+          
+          {/* Population */}
+          <div className="bg-gray-800 rounded-lg p-4 h-40 overflow-auto">
+            <h3 className="font-bold text-purple-400 mb-2">Population</h3>
+            <div className="space-y-1">
+              {creatures
+                .sort((a, b) => b.fitness - a.fitness)
+                .map((c, i) => (
+                  <div
+                    key={c.id}
+                    className={`flex items-center justify-between p-2 rounded cursor-pointer text-xs ${
+                      selectedCreature && selectedCreature.id === c.id
+                        ? 'bg-cyan-900'
+                        : 'bg-gray-700 hover:bg-gray-600'
+                    }`}
+                    onClick={() => setSelectedCreature(c)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-3 h-3 rounded-full"
+                        style={{ background: c.color }}
+                      />
+                      <span className="text-white">#{c.id}</span>
+                      {i === 0 && <span className="text-yellow-400">👑</span>}
+                    </div>
+                    <span className="text-gray-400">{c.fitness.toFixed(0)}</span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-3 mb-4">
+        <button
+          onClick={() => setRunning(!running)}
+          className={`flex-1 py-3 px-6 rounded-lg font-semibold flex items-center justify-center gap-2 transition ${
+            running ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
+          } text-white`}
+        >
+          {running ? <Pause size={20} /> : <Play size={20} />}
+          {running ? 'Pause Evolution' : 'Start Evolution'}
+        </button>
+        
+        <button
+          onClick={reset}
+          className="py-3 px-6 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold flex items-center gap-2"
+        >
+          <RotateCcw size={20} />
+          Reset
+        </button>
+        
+        <button
+          onClick={evolve}
+          disabled={running}
+          className="py-3 px-6 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 text-white rounded-lg font-semibold flex items-center gap-2"
+        >
+          <Dna size={20} />
+          Evolve Now
+        </button>
+      </div>
+
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="font-bold text-white mb-2">🧬 How Mathematical Evolution Works:</h3>
+        <div className="grid grid-cols-2 gap-4 text-sm text-gray-300">
+          <div className="space-y-1">
+            <div><strong className="text-cyan-400">Genome:</strong> 16 numerical genes encode the mathematical expressions</div>
+            <div><strong className="text-green-400">Equations:</strong> k, e, d, q, c computed from genome values</div>
+            <div><strong className="text-purple-400">Points:</strong> 8000 particles flow according to equations</div>
+          </div>
+          <div className="space-y-1">
+            <div><strong className="text-yellow-400">Recombination:</strong> Mix genomes at random crossover point</div>
+            <div><strong className="text-orange-400">Mutation:</strong> Small changes to gene values</div>
+            <div><strong className="text-pink-400">Duplication/Inversion:</strong> Copy or reverse gene segments</div>
+          </div>
+        </div>
+        <div className="mt-3 pt-3 border-t border-gray-700 text-sm text-gray-300">
+          <strong>Fitness:</strong> Coverage + Smoothness + Complexity + Longevity → Beautiful patterns survive!
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default MathematicalCreatures;
