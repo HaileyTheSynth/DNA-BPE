@@ -353,14 +353,23 @@ Perhaps, as Karpathy suggested, we may eventually "delete tokenization" entirely
 
 References
 Karpathy, A. (2024). "Let's build the GPT Tokenizer." YouTube Educational Series. https://www.youtube.com/watch?v=zduSFxRajkE
+
 Sennrich, R., Haddow, B., & Birch, A. (2016). "Neural Machine Translation of Rare Words with Subword Units." ACL 2016.
+
 Gage, P. (1994). "A New Algorithm for Data Compression." C Users Journal, 12(2).
+
 Vaswani, A., et al. (2017). "Attention is All You Need." NeurIPS 2017.
+
 Radford, A., et al. (2019). "Language Models are Unsupervised Multitask Learners." OpenAI Blog.
+
 Touvron, H., et al. (2023). "Llama 2: Open Foundation and Fine-Tuned Chat Models." arXiv:2307.09288.
+
 Brown, T., et al. (2020). "Language Models are Few-Shot Learners." NeurIPS 2020.
+
 Crick, F. H. C. (1968). "The Origin of the Genetic Code." Journal of Molecular Biology, 38(3), 367-379.
+
 Shannon, C. E. (1948). "A Mathematical Theory of Communication." Bell System Technical Journal, 27(3), 379-423.
+
 
 Appendix A: Complete Codon Table
 CodonQuaternaryDecimalASCII MappingAAA0000(packed)AAU0011(packed)AAG0022(packed)AAC0033(packed)............AUG0104START............CAA20032' ' (space)CAU20133'!'............UAA30048STOPUAG30149STOPUGA30250STOP
