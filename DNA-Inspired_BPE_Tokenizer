@@ -1,0 +1,434 @@
+import React, { useState, useMemo } from 'react';
+import { Play, Download, Zap } from 'lucide-react';
+
+const DNATokenizer = () => {
+  const [inputText, setInputText] = useState("Hello World! 你好");
+  const [vocabSize, setVocabSize] = useState(20);
+  const [trained, setTrained] = useState(false);
+  const [merges, setMerges] = useState([]);
+  const [encodedSequence, setEncodedSequence] = useState([]);
+
+  // Generate all 64 codons
+  const generateCodons = () => {
+    const bases = ['A', 'U', 'G', 'C'];
+    const codons = [];
+    for (let i = 0; i < bases.length; i++) {
+      for (let j = 0; j < bases.length; j++) {
+        for (let k = 0; k < bases.length; k++) {
+          codons.push(bases[i] + bases[j] + bases[k]);
+        }
+      }
+    }
+    return codons;
+  };
+
+  const allCodons = useMemo(() => generateCodons(), []);
+
+  // Special codons
+  const SPECIAL = {
+    START: 'AUG',
+    STOP1: 'UAA',
+    STOP2: 'UAG', 
+    STOP3: 'UGA'
+  };
+
+  // Create codon table (1: Codon Table)
+  const codonTable = useMemo(() => {
+    const table = {};
+    const reverseTable = {};
+    
+    // Reserve special codons
+    const reserved = [SPECIAL.START, SPECIAL.STOP1, SPECIAL.STOP2, SPECIAL.STOP3];
+    const available = allCodons.filter(c => !reserved.includes(c));
+    
+    // Common ASCII characters (space through ~)
+    const commonAscii = [];
+    for (let i = 32; i <= 126; i++) {
+      commonAscii.push(i);
+    }
+    
+    // Map common ASCII to single codons
+    commonAscii.forEach((byte, idx) => {
+      if (idx < available.length) {
+        const codon = available[idx];
+        table[byte] = codon;
+        reverseTable[codon] = byte;
+      }
+    });
+    
+    return { table, reverseTable, available };
+  }, [allCodons]);
+
+  // Pack 3 bytes into 4 codons (perfect packing!)
+  const packBytes = (bytes) => {
+    const codons = [];
+    for (let i = 0; i < bytes.length; i += 3) {
+      const chunk = bytes.slice(i, i + 3);
+      
+      // Pad if needed
+      while (chunk.length < 3) chunk.push(0);
+      
+      // Convert 3 bytes (24 bits) to 4 6-bit values
+      const bits24 = (chunk[0] << 16) | (chunk[1] << 8) | chunk[2];
+      const val1 = (bits24 >> 18) & 0x3F;
+      const val2 = (bits24 >> 12) & 0x3F;
+      const val3 = (bits24 >> 6) & 0x3F;
+      const val4 = bits24 & 0x3F;
+      
+      codons.push(allCodons[val1], allCodons[val2], allCodons[val3], allCodons[val4]);
+    }
+    return codons;
+  };
+
+  // Unpack 4 codons back to 3 bytes
+  const unpackCodons = (codons) => {
+    const bytes = [];
+    for (let i = 0; i < codons.length; i += 4) {
+      const chunk = codons.slice(i, i + 4);
+      if (chunk.length !== 4) break;
+      
+      const val1 = allCodons.indexOf(chunk[0]);
+      const val2 = allCodons.indexOf(chunk[1]);
+      const val3 = allCodons.indexOf(chunk[2]);
+      const val4 = allCodons.indexOf(chunk[3]);
+      
+      const bits24 = (val1 << 18) | (val2 << 12) | (val3 << 6) | val4;
+      bytes.push((bits24 >> 16) & 0xFF);
+      bytes.push((bits24 >> 8) & 0xFF);
+      bytes.push(bits24 & 0xFF);
+    }
+    return bytes;
+  };
+
+  // 2: Encoder
+  const encodeText = (text) => {
+    const codons = [];
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(text);
+    
+    for (let i = 0; i < bytes.length; i++) {
+      const byte = bytes[i];
+      
+      // Try direct ASCII mapping first
+      if (codonTable.table[byte]) {
+        codons.push(codonTable.table[byte]);
+      } else {
+        // Use packed mode for non-ASCII
+        // Collect bytes until we hit ASCII again or end
+        const packed = [byte];
+        while (i + 1 < bytes.length && !codonTable.table[bytes[i + 1]]) {
+          i++;
+          packed.push(bytes[i]);
+        }
+        
+        // Encode as START + packed + STOP
+        codons.push(SPECIAL.START);
+        codons.push(...packBytes(packed));
+        codons.push(SPECIAL.STOP1);
+      }
+    }
+    
+    return codons;
+  };
+
+  // 2: Decoder
+  const decodeSequence = (codons) => {
+    const bytes = [];
+    let i = 0;
+    
+    while (i < codons.length) {
+      const codon = codons[i];
+      
+      if (codon === SPECIAL.START) {
+        // Packed mode
+        i++;
+        const packed = [];
+        while (i < codons.length && ![SPECIAL.STOP1, SPECIAL.STOP2, SPECIAL.STOP3].includes(codons[i])) {
+          packed.push(codons[i]);
+          i++;
+        }
+        bytes.push(...unpackCodons(packed));
+        i++; // Skip STOP
+      } else if (codonTable.reverseTable[codon]) {
+        // Direct mapping
+        bytes.push(codonTable.reverseTable[codon]);
+        i++;
+      } else {
+        i++; // Skip unknown
+      }
+    }
+    
+    const decoder = new TextDecoder();
+    return decoder.decode(new Uint8Array(bytes));
+  };
+
+  // 4: BPE Training
+  const trainBPE = () => {
+    const codons = encodeText(inputText);
+    let sequence = [...codons];
+    const learnedMerges = [];
+    
+    // Train BPE
+    for (let merge = 0; merge < vocabSize; merge++) {
+      // Count pairs
+      const pairs = {};
+      for (let i = 0; i < sequence.length - 1; i++) {
+        const pair = `${sequence[i]}|${sequence[i + 1]}`;
+        pairs[pair] = (pairs[pair] || 0) + 1;
+      }
+      
+      // Find most common pair
+      let maxPair = null;
+      let maxCount = 0;
+      for (const [pair, count] of Object.entries(pairs)) {
+        if (count > maxCount) {
+          maxCount = count;
+          maxPair = pair;
+        }
+      }
+      
+      if (!maxPair || maxCount < 2) break;
+      
+      // Merge the pair
+      const [c1, c2] = maxPair.split('|');
+      const newToken = `(${c1}+${c2})`;
+      learnedMerges.push({ pair: maxPair, token: newToken, count: maxCount });
+      
+      // Apply merge
+      const newSequence = [];
+      let i = 0;
+      while (i < sequence.length) {
+        if (i < sequence.length - 1 && sequence[i] === c1 && sequence[i + 1] === c2) {
+          newSequence.push(newToken);
+          i += 2;
+        } else {
+          newSequence.push(sequence[i]);
+          i++;
+        }
+      }
+      sequence = newSequence;
+    }
+    
+    setMerges(learnedMerges);
+    setEncodedSequence(sequence);
+    setTrained(true);
+  };
+
+  // 3: Visualization
+  const renderDNA = (codons, highlight = false) => {
+    const complement = { 'A': 'U', 'U': 'A', 'G': 'C', 'C': 'G' };
+    
+    return (
+      <div className="bg-gray-900 p-4 rounded-lg overflow-x-auto">
+        <div className="font-mono text-xs space-y-1">
+          {codons.map((codon, idx) => {
+            const isSpecial = Object.values(SPECIAL).includes(codon);
+            const isToken = codon.startsWith('(');
+            
+            return (
+              <div key={idx} className="flex items-center gap-2">
+                <span className="text-gray-500 w-8">{idx}</span>
+                <div className="flex gap-1">
+                  {isToken ? (
+                    <span className="px-2 py-1 bg-purple-500 text-white rounded">
+                      {codon}
+                    </span>
+                  ) : (
+                    <>
+                      {codon.split('').map((base, i) => (
+                        <div key={i} className="flex flex-col items-center">
+                          <div className={`w-8 h-8 flex items-center justify-center rounded ${
+                            isSpecial ? 'bg-yellow-500 text-black font-bold' :
+                            base === 'A' ? 'bg-red-500' :
+                            base === 'U' ? 'bg-blue-500' :
+                            base === 'G' ? 'bg-green-500' :
+                            'bg-orange-500'
+                          } text-white`}>
+                            {base}
+                          </div>
+                          <div className="h-4 w-0.5 bg-gray-600"></div>
+                          <div className={`w-8 h-8 flex items-center justify-center rounded ${
+                            complement[base] === 'A' ? 'bg-red-400' :
+                            complement[base] === 'U' ? 'bg-blue-400' :
+                            complement[base] === 'G' ? 'bg-green-400' :
+                            'bg-orange-400'
+                          } text-white opacity-60`}>
+                            {complement[base]}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+                {isSpecial && (
+                  <span className="text-yellow-400 text-xs">
+                    {codon === SPECIAL.START ? '← START' : '← STOP'}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const initialCodons = useMemo(() => encodeText(inputText), [inputText, codonTable]);
+
+  return (
+    <div className="w-full max-w-6xl mx-auto p-6 bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl shadow-lg">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">🧬 DNA-Inspired BPE Tokenizer</h1>
+        <p className="text-gray-600">Biological tokenization with complementary base pairs and BPE!</p>
+      </div>
+
+      {/* Input Section */}
+      <div className="bg-white rounded-lg shadow p-4 mb-4">
+        <label className="block text-sm font-semibold text-gray-700 mb-2">Input Text</label>
+        <textarea
+          value={inputText}
+          onChange={(e) => {
+            setInputText(e.target.value);
+            setTrained(false);
+          }}
+          className="w-full p-3 border border-gray-300 rounded-lg font-mono text-sm"
+          rows={3}
+          placeholder="Enter text to tokenize..."
+        />
+      </div>
+
+      {/* Controls */}
+      <div className="bg-white rounded-lg shadow p-4 mb-4 flex gap-4 items-end">
+        <div className="flex-1">
+          <label className="block text-sm font-semibold text-gray-700 mb-2">
+            BPE Vocabulary Size: {vocabSize}
+          </label>
+          <input
+            type="range"
+            min="5"
+            max="50"
+            value={vocabSize}
+            onChange={(e) => {
+              setVocabSize(parseInt(e.target.value));
+              setTrained(false);
+            }}
+            className="w-full"
+          />
+        </div>
+        <button
+          onClick={trainBPE}
+          className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg font-semibold flex items-center gap-2 hover:from-purple-700 hover:to-pink-700 transition"
+        >
+          <Zap size={20} />
+          Train BPE
+        </button>
+      </div>
+
+      {/* Codon Table */}
+      <div className="bg-white rounded-lg shadow p-4 mb-4">
+        <h2 className="text-xl font-bold text-gray-800 mb-3">1️⃣ Codon Table (64 Codons)</h2>
+        <div className="grid grid-cols-8 gap-2 mb-4">
+          {allCodons.slice(0, 32).map(codon => {
+            const isSpecial = Object.values(SPECIAL).includes(codon);
+            const byte = codonTable.reverseTable[codon];
+            return (
+              <div key={codon} className={`p-2 rounded text-center text-xs ${
+                isSpecial ? 'bg-yellow-100 border-2 border-yellow-500' : 'bg-gray-100'
+              }`}>
+                <div className="font-mono font-bold">{codon}</div>
+                {byte !== undefined && (
+                  <div className="text-gray-600">{String.fromCharCode(byte)}</div>
+                )}
+                {isSpecial && <div className="text-yellow-700 text-xs">SPECIAL</div>}
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-sm text-gray-600">+ 32 more codons... (showing first 32)</p>
+      </div>
+
+      {/* Initial Encoding */}
+      <div className="bg-white rounded-lg shadow p-4 mb-4">
+        <h2 className="text-xl font-bold text-gray-800 mb-3">2️⃣ Initial Encoding (Text → Codons)</h2>
+        <div className="mb-2 p-3 bg-blue-50 rounded border border-blue-200">
+          <div className="text-sm text-gray-700 mb-1">
+            <strong>Original:</strong> "{inputText}"
+          </div>
+          <div className="text-sm text-gray-700">
+            <strong>Codons:</strong> {initialCodons.length} tokens
+          </div>
+        </div>
+        {renderDNA(initialCodons)}
+      </div>
+
+      {/* BPE Results */}
+      {trained && (
+        <>
+          <div className="bg-white rounded-lg shadow p-4 mb-4">
+            <h2 className="text-xl font-bold text-gray-800 mb-3">4️⃣ BPE Merges Learned</h2>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {merges.map((merge, idx) => (
+                <div key={idx} className="p-3 bg-purple-50 rounded border border-purple-200">
+                  <div className="flex justify-between items-center">
+                    <div className="font-mono text-sm">
+                      <span className="text-purple-700">#{idx + 1}</span>{' '}
+                      <span className="font-bold">{merge.pair.replace('|', ' + ')}</span>{' '}
+                      → <span className="text-purple-600">{merge.token}</span>
+                    </div>
+                    <span className="text-sm text-gray-600">
+                      Count: {merge.count}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-4 mb-4">
+            <h2 className="text-xl font-bold text-gray-800 mb-3">3️⃣ Final Encoded Sequence (After BPE)</h2>
+            <div className="mb-2 p-3 bg-green-50 rounded border border-green-200">
+              <div className="text-sm text-gray-700">
+                <strong>Compression:</strong> {initialCodons.length} → {encodedSequence.length} tokens 
+                ({((1 - encodedSequence.length / initialCodons.length) * 100).toFixed(1)}% reduction)
+              </div>
+            </div>
+            {renderDNA(encodedSequence, true)}
+          </div>
+        </>
+      )}
+
+      {/* Legend */}
+      <div className="bg-white rounded-lg shadow p-4">
+        <h3 className="font-bold text-gray-800 mb-2">Legend</h3>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-red-500 rounded"></div>
+            <span>Adenine (A)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-blue-500 rounded"></div>
+            <span>Uracil (U)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-green-500 rounded"></div>
+            <span>Guanine (G)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-orange-500 rounded"></div>
+            <span>Cytosine (C)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-yellow-500 rounded"></div>
+            <span>Special (START/STOP)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-purple-500 rounded"></div>
+            <span>BPE Merged Token</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DNATokenizer;
